@@ -1,19 +1,28 @@
 import os
 import re
-import hashlib
 import pandas as pd
 from datetime import datetime
 import subprocess
+import magic
 
-try:
-    import magic
-    USE_MAGIC = True
-except ImportError:
-    import mimetypes
-    USE_MAGIC = False
-
+# default flag, will be overridden by user input
 DO_HASH = False
 
+# clean yes/no input in user prompt
+def prompt_yes_no(message, default="n"):
+    while True:
+        choice = input(f"{message} (y/n, default={default}): ").strip().lower()
+        if not choice:
+            choice = default
+        if choice in ["y", "yes"]:
+            return True
+        elif choice in ["n", "no"]:
+            return False
+        else:
+            print("Please enter y or n.\n")
+
+
+# hash check if user selected
 def get_md5(file_path):
     try:
         result = subprocess.run(
@@ -28,14 +37,10 @@ def get_md5(file_path):
 
 
 def get_mime_type(file_path):
-    if USE_MAGIC:
-        try:
-            return magic.from_file(file_path, mime=True)
-        except Exception:
-            return None
-    else:
-        mime, _ = mimetypes.guess_type(file_path)
-        return mime
+    try:
+        return magic.from_file(file_path, mime=True)
+    except Exception:
+        return None
 
 
 def scan_directory(root):
@@ -68,20 +73,15 @@ def scan_directory(root):
 
     return pd.DataFrame(records)
 
-
+# pandas to get basic analysis
 def analyze(df):
-    # total stats
     total_files = len(df)
     total_size = df["file_size"].sum()
 
-    # duplicates
     if df["md5"].notna().any():
-        # if generating checksum, use this for duplicate check
         dup_key = "md5"
         duplicate_method = "md5"
-
-    else:
-        # if not generating a checksum, match duplicates via size and name
+    else: # backup option for duplicate detection if md5 not run
         dup_key = ["file_size", "file_name"]
         duplicate_method = "file_size + file_name (approximate)"
 
@@ -93,23 +93,20 @@ def analyze(df):
         .nunique()
     )
 
-    # mime stats
     mime_stats = df.groupby("mime_type").agg(
         file_count=("file_name", "count"),
         total_size=("file_size", "sum")
     ).reset_index().sort_values("file_count", ascending=False)
 
-    # folder stats
     folder_stats = df.groupby("folder").agg(
         file_count=("file_name", "count"),
         total_size=("file_size", "sum")
     ).reset_index().sort_values("file_count", ascending=False)
 
-    # date analysis
-    df["year"] = df["last_modified"].dt.year
-    min_year = df["year"].min()
-    max_year = df["year"].max()
-    mean_year = int(df["year"].mean()) if not df["year"].isna().all() else None
+    years = df["last_modified"].dt.year
+    min_year = years.min()
+    max_year = years.max()
+    mean_year = int(years.mean()) if not years.isna().all() else None
 
     summary = pd.DataFrame([{
         "total_files": total_files,
@@ -133,36 +130,38 @@ def export_to_excel(df, summary, mime_stats, folder_stats, dup_groups, output_fi
         folder_stats.to_excel(writer, sheet_name="By Folder", index=False)
         dup_groups.to_excel(writer, sheet_name="Duplicates", index=False)
 
+# 
 def normalize_path(path):
     path = path.strip().strip('"')
-
-    # convert Windows-style slashes to Unix-style (safe on all platforms)
     path = path.replace("\\", "/")
 
-    # handle drive letter (e.g., M:/ → /mnt/m/)
     match = re.match(r"^([A-Za-z]):/(.*)", path)
     if match:
         drive = match.group(1).lower()
         rest = match.group(2)
-        path = f"/mnt/{drive}/{rest}"
+        path = f"/home/mrothrock/mnt/{drive}/{rest}"
 
-    # normalize for current OS (this will fix slashes appropriately)
     path = os.path.normpath(path)
 
     return path
+
+
 
 if __name__ == "__main__":
     # prompt for directory
     while True:
         root_folder_input = input("Enter the directory to scan: ")
-        root_folder = normalize_path(root_folder_input) 
+        root_folder = normalize_path(root_folder_input)
+        print(f"Path normalized to: {root_folder}")
         if os.path.isdir(root_folder):
             break
         else:
-            print("That path doesn't exist or isn't a directory. Try again!\n")
+            print("That path doesn't exist or isn't a directory. (Is the shared drive mounted?)\n")
 
-    # prompt for output file (will create in current directory unless specified)
-    output_excel = input("Enter output Excel filename with optional full path (default: inventory_report.xlsx): ").strip()
+    # prompt for output file
+    output_excel = input(
+        "Enter output Excel filename with optional full path (default: ./inventory_report.xlsx): "
+    ).strip()
 
     if not output_excel:
         output_excel = "inventory_report.xlsx"
@@ -170,8 +169,10 @@ if __name__ == "__main__":
     if not output_excel.lower().endswith(".xlsx"):
         output_excel += ".xlsx"
 
-    print("\nScanning directory ...\n")
+    # prompt for hashing
+    DO_HASH = prompt_yes_no("Generate MD5 checksums?")
 
+    print("Scanning directory ...\n")
     df = scan_directory(root_folder)
 
     print("Analyzing data ...\n")

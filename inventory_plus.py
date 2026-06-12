@@ -5,8 +5,9 @@ from datetime import datetime
 import subprocess
 import magic
 
-# default flag, will be overridden by user input
+# default flags, will be overridden by user input
 DO_HASH = False
+EXCLUE_HIDDEN = False
 
 # clean yes/no input in user prompt
 def prompt_yes_no(message, default="n"):
@@ -42,12 +43,31 @@ def get_mime_type(file_path):
     except Exception:
         return None
 
+SKIP_FILES = {
+    "thumbs.db",
+    "desktop.ini"}
 
 def scan_directory(root):
     records = []
 
     for dirpath, dirnames, filenames in os.walk(root):
+        
+        # skip hidden folders
+        if EXCLUDE_HIDDEN:
+            dirnames[:] = [
+                d for d in dirnames
+                if not d.startswith(".")
+            ]
+        
         for name in filenames:
+            
+            # skip hidden files and thumbs.db, etc.
+            if EXCLUDE_HIDDEN:
+                if name.startswith("."):
+                    continue
+                if name.lower() in SKIP_FILES:
+                    continue
+            
             full_path = os.path.join(dirpath, name)
 
             try:
@@ -130,7 +150,7 @@ def export_to_excel(df, summary, mime_stats, folder_stats, dup_groups, output_fi
         folder_stats.to_excel(writer, sheet_name="By Folder", index=False)
         dup_groups.to_excel(writer, sheet_name="Duplicates", index=False)
 
-# 
+# fix Windows-style paths
 def normalize_path(path):
     path = path.strip().strip('"')
     path = path.replace("\\", "/")
@@ -171,6 +191,9 @@ if __name__ == "__main__":
 
     # prompt for hashing
     DO_HASH = prompt_yes_no("Generate MD5 checksums?")
+
+    # prompt for hidden files
+    EXCLUDE_HIDDEN = prompt_yes_no("Exclude hidden files/folders and Thumbs.db?")
 
     print("Scanning directory ...\n")
     df = scan_directory(root_folder)
